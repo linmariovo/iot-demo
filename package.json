@@ -1,0 +1,19 @@
+{
+  "name": "iot-demo",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "pub": "node publisher.js",
+    "sub": "node subscriber.js",
+    "start": "node server.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "dotenv": "^18.0.8",
+    "express": "^5.3.0",
+    "mqtt": "^5.16.1"
+  }
+}
