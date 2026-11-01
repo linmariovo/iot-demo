@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>IoT 历史数据可视化</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+      background: #f0f4f8;
+      color: #1f2d3d;
+      padding: 24px;
+    }
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 20px;
+    }
+    .header h1 { font-size: 24px; color: #0b7a5c; }
+    .header .topic {
+      font-size: 13px;
+      color: #5a6b7b;
+      background: #e3edf7;
+      padding: 6px 12px;
+      border-radius: 14px;
+    }
+    .cards { display: flex; gap: 16px; margin-bottom: 20px; flex-wrap: wrap; }
+    .card {
+      flex: 1;
+      min-width: 180px;
+      background: #fff;
+      border-radius: 12px;
+      padding: 16px 20px;
+      box-shadow: 0 2px 8px rgba(15, 60, 90, 0.08);
+    }
+    .card .label { font-size: 13px; color: #7a8a9a; margin-bottom: 6px; }
+    .card .value { font-size: 30px; font-weight: 700; }
+    .card .value small { font-size: 15px; font-weight: 400; color: #7a8a9a; }
+    .card .unit { font-size: 14px; color: #7a8a9a; }
+    #avgTemp .value { color: #e0553c; }
+    #avgHumi .value { color: #1e7fd4; }
+    #totalNum .value { color: #34506b; }
+    .panel {
+      background: #fff;
+      border-radius: 12px;
+      padding: 16px 20px;
+      box-shadow: 0 2px 8px rgba(15, 60, 90, 0.08);
+      margin-bottom: 20px;
+    }
+    .panel h2 { font-size: 16px; color: #34506b; margin-bottom: 12px; }
+    #chartWrap { position: relative; width: 100%; height: 320px; }
+    canvas { width: 100%; height: 100%; display: block; }
+    .legend { font-size: 13px; color: #5a6b7b; margin-top: 8px; }
+    .legend .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 4px; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid #e8eef4; }
+    th { color: #7a8a9a; font-weight: 600; }
+    .toolbar { margin-bottom: 12px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+    .toolbar select, .toolbar input, .toolbar button {
+      font-size: 13px; padding: 5px 10px;
+      border: 1px solid #c6d2de; border-radius: 6px;
+      background: #fff; color: #1f2d3d;
+    }
+    .toolbar button { background: #0b7a5c; color: #fff; border: none; cursor: pointer; }
+    .toolbar button:hover { opacity: 0.9; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>IoT 历史数据可视化</h1>
+    <span class="topic">数据来源：SQLite 历史数据库 (iot_history.db)</span>
+  </div>
+
+  <div class="toolbar">
+    <span style="font-size:13px;color:#5a6b7b;">查询条件：</span>
+    <select id="deviceSel">
+      <option value="">全部设备</option>
+      <option value="sensor-001">sensor-001</option>
+    </select>
+    <input id="limitInput" type="number" value="200" min="1" max="2000" style="width:90px;" />
+    <span style="font-size:13px;color:#5a6b7b;">条</span>
+    <button id="queryBtn">查询</button>
+    <span id="queryInfo" style="font-size:13px;color:#7a8a9a;"></span>
+  </div>
+
+  <div class="cards">
+    <div class="card" id="totalNum">
+      <div class="label">历史记录总数</div>
+      <div class="value"><span id="totalVal">--</span></div>
+      <div class="unit">条（写入 SQLite）</div>
+    </div>
+    <div class="card" id="avgTemp">
+      <div class="label">平均温度</div>
+      <div class="value"><span id="avgTempVal">--</span><small> ℃</small></div>
+    </div>
+    <div class="card" id="avgHumi">
+      <div class="label">平均湿度</div>
+      <div class="value"><span id="avgHumiVal">--</span><small> %</small></div>
+    </div>
+    <div class="card">
+      <div class="label">本次查询返回</div>
+      <div class="value"><span id="rowsVal">0</span></div>
+      <div class="unit">条记录</div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>历史温湿度变化曲线（SQLite 存储数据）</h2>
+    <div id="chartWrap"><canvas id="chart"></canvas></div>
+    <div class="legend">
+      <span><span class="dot" style="background:#e0553c;"></span>温度 (℃)</span>
+      &nbsp;&nbsp;
+      <span><span class="dot" style="background:#1e7fd4;"></span>湿度 (%)</span>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>历史数据明细表</h2>
+    <table>
+      <thead>
+        <tr><th>ID</th><th>时间</th><th>设备</th><th>温度 (℃)</th><th>湿度 (%)</th></tr>
+      </thead>
+      <tbody id="dataRows">
+        <tr><td colspan="5">等待查询数据…</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <script>
+    let data = [];
+
+    const fmtTime = (ts) => {
+      const d = new Date(ts);
+      const p = (n) => (n < 10 ? "0" + n : "" + n);
+      return p(d.getMonth() + 1) + "-" + p(d.getDate()) + " " +
+             p(d.getHours()) + ":" + p(d.getMinutes()) + ":" + p(d.getSeconds());
+    };
+
+    // 用 Canvas 绘制历史温湿度曲线
+    function drawChart() {
+      const canvas = document.getElementById("chart");
+      const wrap = document.getElementById("chartWrap");
+      const dpr = window.devicePixelRatio || 1;
+      const w = wrap.clientWidth, h = wrap.clientHeight;
+      canvas.width = w * dpr; canvas.height = h * dpr;
+      canvas.style.width = w + "px"; canvas.style.height = h + "px";
+      const ctx = canvas.getContext("2d");
+      ctx.scale(dpr, dpr);
+
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, w, h);
+
+      if (data.length < 2) {
+        ctx.fillStyle = "#9aa8b6";
+        ctx.font = "14px Microsoft YaHei";
+        ctx.textAlign = "center";
+        ctx.fillText("暂无历史数据，请先运行 publisher 发布数据", w / 2, h / 2);
+        ctx.textAlign = "left";
+        return;
+      }
+
+      const padL = 48, padR = 16, padT = 14, padB = 30;
+      const plotW = w - padL - padR, plotH = h - padT - padB;
+
+      let tMin = Infinity, tMax = -Infinity, huMin = Infinity, huMax = -Infinity;
+      data.forEach((d) => {
+        const t = parseFloat(d.temperature), hu = parseFloat(d.humidity);
+        if (!isNaN(t)) { tMin = Math.min(tMin, t); tMax = Math.max(tMax, t); }
+        if (!isNaN(hu)) { huMin = Math.min(huMin, hu); huMax = Math.max(huMax, hu); }
+      });
+      tMin = Math.floor((tMin - 1) / 2) * 2; tMax = Math.ceil((tMax + 1) / 2) * 2;
+      huMin = Math.floor((huMin - 2) / 5) * 5; huMax = Math.ceil((huMax + 2) / 5) * 5;
+      const T = (v) => padT + plotH - ((v - tMin) / (tMax - tMin || 1)) * plotH;
+      const H = (v) => padT + plotH - ((v - huMin) / (huMax - huMin || 1)) * plotH;
+      const X = (i) => padL + (i / (data.length - 1)) * plotW;
+
+      // 网格与坐标轴
+      ctx.strokeStyle = "#e8eef4"; ctx.lineWidth = 1;
+      for (let i = 0; i <= 4; i++) {
+        const y = padT + (i / 4) * plotH;
+        ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(w - padR, y); ctx.stroke();
+      }
+      ctx.strokeStyle = "#c6d2de";
+      ctx.beginPath();
+      ctx.moveTo(padL, padT); ctx.lineTo(padL, padT + plotH); ctx.lineTo(w - padR, padT + plotH);
+      ctx.stroke();
+
+      ctx.fillStyle = "#7a8a9a"; ctx.font = "11px Microsoft YaHei"; ctx.textAlign = "right";
+      ctx.fillText(tMax.toFixed(0) + "℃", padL - 6, padT + 4);
+      ctx.fillText(tMin.toFixed(0) + "℃", padL - 6, padT + plotH + 4);
+      ctx.fillText(huMax.toFixed(0) + "%", w - padR + 6, padT + 4);
+      ctx.fillText(huMin.toFixed(0) + "%", w - padR + 6, padT + plotH + 4);
+
+      // 时间刻度
+      ctx.textAlign = "center";
+      const step = Math.max(1, Math.floor(data.length / 6));
+      for (let i = 0; i < data.length; i += step) {
+        ctx.fillText(fmtTime(data[i].ts).slice(6), X(i), padT + plotH + 16);
+      }
+      ctx.textAlign = "left";
+
+      const line = (vals, yFn, color) => {
+        ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.lineJoin = "round";
+        ctx.beginPath();
+        let started = false;
+        data.forEach((d, i) => {
+          const v = parseFloat(d[vals]);
+          if (isNaN(v)) return;
+          const x = X(i), y = yFn(v);
+          if (!started) { ctx.moveTo(x, y); started = true; } else ctx.lineTo(x, y);
+        });
+        ctx.stroke();
+        data.forEach((d, i) => {
+          const v = parseFloat(d[vals]);
+          if (isNaN(v)) return;
+          ctx.fillStyle = color;
+          ctx.beginPath(); ctx.arc(X(i), yFn(v), 2.5, 0, Math.PI * 2); ctx.fill();
+        });
+      };
+      line("temperature", T, "#e0553c");
+      line("humidity", H, "#1e7fd4");
+    }
+
+    function render() {
+      if (data.length > 0) {
+        const avg = (k) => data.reduce((s, d) => s + parseFloat(d[k]), 0) / data.length;
+        document.getElementById("totalVal").textContent = data[0].totalCount !== undefined ? data[0].totalCount : data.length;
+        document.getElementById("avgTempVal").textContent = avg("temperature").toFixed(2);
+        document.getElementById("avgHumiVal").textContent = avg("humidity").toFixed(2);
+        document.getElementById("rowsVal").textContent = data.length;
+      } else {
+        document.getElementById("avgTempVal").textContent = "--";
+        document.getElementById("avgHumiVal").textContent = "--";
+        document.getElementById("rowsVal").textContent = "0";
+      }
+      const rows = document.getElementById("dataRows");
+      rows.innerHTML = "";
+      data.slice(0, 50).forEach((d) => {
+        const tr = document.createElement("tr");
+        const cells = [d.id, fmtTime(d.ts), d.deviceId, d.temperature + " ℃", d.humidity + " %"];
+        cells.forEach((c) => {
+          const td = document.createElement("td");
+          td.textContent = c; tr.appendChild(td);
+        });
+        rows.appendChild(tr);
+      });
+      if (data.length === 0) {
+        rows.innerHTML = "<tr><td colspan='5'>暂无历史数据</td></tr>";
+      }
+      drawChart();
+    }
+
+    async function query() {
+      const device = document.getElementById("deviceSel").value;
+      const limit = document.getElementById("limitInput").value || 200;
+      const params = new URLSearchParams({ limit });
+      if (device) params.set("device", device);
+      const res = await fetch("/api/history?" + params.toString());
+      data = await res.json();
+      document.getElementById("queryInfo").textContent =
+        "查询条件：limit=" + limit + (device ? ", device=" + device : "") + "，返回 " + data.length + " 条";
+      render();
+    }
+
+    document.getElementById("queryBtn").addEventListener("click", query);
+    document.getElementById("deviceSel").addEventListener("change", query);
+    document.getElementById("limitInput").addEventListener("change", query);
+    query();
+    setInterval(query, 5000);
+    window.addEventListener("resize", drawChart);
+  </script>
+</body>
+</html>

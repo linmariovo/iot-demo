@@ -2,6 +2,7 @@ require('dotenv').config();
 const path = require('path');
 const express = require('express');
 const mqtt = require('mqtt');
+const { insertSensorData, queryHistory } = require('./history_db');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -35,6 +36,7 @@ client.on('message', (t, payload) => {
     data.receivedAt = Date.now();
     history.push(data);
     if (history.length > MAX_HISTORY) history.shift();
+    insertSensorData(data); // 写入 SQLite 历史数据库
   } catch (e) {
     console.error('[WEB] Bad payload:', payload.toString());
   }
@@ -45,6 +47,12 @@ client.on('error', (err) => console.error('[WEB] MQTT error:', err.message));
 // 静态页面与数据接口
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('/api/data', (req, res) => res.json(history));
+// 历史数据查询接口：/api/history?limit=100&device=sensor-001
+app.get('/api/history', (req, res) => {
+  const limit = req.query.limit ? Number(req.query.limit) : 100;
+  const deviceId = req.query.device || null;
+  res.json(queryHistory({ limit, deviceId }));
+});
 
 app.listen(PORT, () => {
   console.log(`[WEB] 可视化页面: http://localhost:${PORT}`);
